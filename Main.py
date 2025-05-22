@@ -20,6 +20,10 @@ if 'gemini_api_key' not in st.session_state:
     st.session_state.gemini_api_key = ""
 if 'elevenlabs_api_key' not in st.session_state:
     st.session_state.elevenlabs_api_key = ""
+if 'extracted_pdf_text' not in st.session_state: # To store extracted text for Q&A
+    st.session_state.extracted_pdf_text = ""
+if 'last_summary' not in st.session_state:
+    st.session_state.last_summary = None
 
 st.session_state.gemini_api_key = st.sidebar.text_input(
     "Gemini API Key",
@@ -48,8 +52,8 @@ def extract_text_from_pdf(uploaded_file):
         st.error(f"Error extracting text from PDF: {e}")
         return None
 
-def summarize_text_with_gemini(text, gemini_api_key):
-    """Summarizes text using the Gemini API."""
+def call_gemini_api(prompt_text, gemini_api_key):
+    """Generic function to call Gemini API with a given prompt."""
     if not gemini_api_key:
         st.error("Gemini API Key is not provided. Please enter it in the sidebar.")
         return None
@@ -63,7 +67,7 @@ def summarize_text_with_gemini(text, gemini_api_key):
                 "role": "user",
                 "parts": [
                     {
-                        "text": f"Summarize the following PDF text without using any asterisks. Keep the summary concise and informative:\n\n{text}"
+                        "text": prompt_text
                     }
                 ]
             }
@@ -71,18 +75,16 @@ def summarize_text_with_gemini(text, gemini_api_key):
     }
 
     try:
-        with st.spinner("Summarizing with Gemini..."):
-            response = requests.post(f"{GEMINI_API_URL}?key={gemini_api_key}", headers=headers, json=payload)
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            result = response.json()
+        response = requests.post(f"{GEMINI_API_URL}?key={gemini_api_key}", headers=headers, json=payload)
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        result = response.json()
 
-            if result and result.get("candidates") and result["candidates"][0].get("content") and result["candidates"][0]["content"].get("parts"):
-                summary = result["candidates"][0]["content"]["parts"][0]["text"]
-                return summary
-            else:
-                st.error("Gemini API did not return a valid summary. Response structure unexpected.")
-                st.json(result) # Display full response for debugging
-                return None
+        if result and result.get("candidates") and result["candidates"][0].get("content") and result["candidates"][0]["content"].get("parts"):
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            st.error("Gemini API did not return a valid response. Response structure unexpected.")
+            st.json(result) # Display full response for debugging
+            return None
     except requests.exceptions.HTTPError as e:
         st.error(f"Gemini API Error: {e.response.status_code} - {e.response.text}")
         return None
@@ -90,8 +92,20 @@ def summarize_text_with_gemini(text, gemini_api_key):
         st.error(f"Gemini API Request Failed: {e}")
         return None
     except Exception as e:
-        st.error(f"An unexpected error occurred during Gemini summarization: {e}")
+        st.error(f"An unexpected error occurred during Gemini API call: {e}")
         return None
+
+def summarize_text_with_gemini(text, gemini_api_key):
+    """Summarizes text using the Gemini API."""
+    prompt = f"Summarize the following PDF text without using any asterisks. Keep the summary concise and informative:\n\n{text}"
+    with st.spinner("Summarizing with Gemini..."):
+        return call_gemini_api(prompt, gemini_api_key)
+
+def answer_question_with_gemini(question, context_text, gemini_api_key):
+    """Answers a question based on provided context using the Gemini API."""
+    prompt = f"Based on the following text, answer the question: '{question}'. If the answer is not in the text, state that you cannot find it. Do not use any asterisks.\n\nText: {context_text}"
+    with st.spinner("Getting answer from Gemini..."):
+        return call_gemini_api(prompt, gemini_api_key)
 
 def text_to_speech_elevenlabs(text, elevenlabs_api_key, voice_id="21m00Tcm4obsnInGRB_v"): # Default to 'Adam' voice
     """Converts text to speech using the ElevenLabs API."""
@@ -137,8 +151,6 @@ uploaded_file = st.file_uploader(
     accept_multiple_files=False
 )
 
-summarized_text = None
-
 if uploaded_file is not None:
     st.success(f"PDF '{uploaded_file.name}' uploaded successfully!")
 
@@ -147,14 +159,12 @@ if uploaded_file is not None:
 
     # Extract text
     extracted_text = extract_text_from_pdf(pdf_bytes)
+    st.session_state.extracted_pdf_text = extracted_text # Store extracted text
 
-    if extracted_text:
-        # st.subheader("Extracted Text (for debugging):")
-        # st.text_area("PDF Content", extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text, height=200)
-
+    if st.session_state.extracted_pdf_text:
         # Summarize text
         if st.session_state.gemini_api_key:
-            summarized_text = summarize_text_with_gemini(extracted_text, st.session_state.gemini_api_key)
+            summarized_text = summarize_text_with_gemini(st.session_state.extracted_pdf_text, st.session_state.gemini_api_key)
             if summarized_text:
                 st.subheader("Summarized Content:")
                 st.write(summarized_text)
@@ -167,7 +177,34 @@ if uploaded_file is not None:
         st.error("Could not extract text from the PDF. Please try a different file.")
         st.session_state.last_summary = None # Clear summary if extraction failed
 
-# Text-to-Speech Section
+# --- Ask a Question Section ---
+if st.session_state.extracted_pdf_text:
+    st.subheader("Ask a Question about the PDF")
+    user_question = st.text_area(
+        "Enter your question here:",
+        key="user_question_input",
+        height=100,
+        help="Ask a question about the content of the uploaded PDF."
+    )
+    if st.button("Get Answer"):
+        if st.session_state.gemini_api_key:
+            if user_question:
+                answer = answer_question_with_gemini(user_question, st.session_state.extracted_pdf_text, st.session_state.gemini_api_key)
+                if answer:
+                    st.subheader("Answer:")
+                    st.write(answer)
+            else:
+                st.warning("Please enter a question to get an answer.")
+        else:
+            st.warning("Please provide your Gemini API Key in the sidebar to ask questions.")
+else:
+    if uploaded_file and not st.session_state.extracted_pdf_text:
+        st.info("Still processing PDF or unable to extract text. Please wait or try another file.")
+    elif not uploaded_file:
+        st.info("Upload a PDF to enable the question-answering feature.")
+
+
+# --- Text-to-Speech Section ---
 if st.session_state.get('last_summary'):
     st.subheader("Convert Summary to Audio")
     if st.button("Generate Podcast Audio"):
@@ -179,7 +216,7 @@ if st.session_state.get('last_summary'):
         else:
             st.warning("Please provide your ElevenLabs API Key in the sidebar to generate audio.")
 else:
-    if uploaded_file and not summarized_text:
+    if uploaded_file and not st.session_state.get('last_summary'):
         st.info("Upload a PDF and ensure Gemini API key is provided to see the summary and generate audio.")
     elif not uploaded_file:
         st.info("Upload a PDF to get started!")
