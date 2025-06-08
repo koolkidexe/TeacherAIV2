@@ -107,7 +107,7 @@ def answer_question_with_gemini(question, context_text, gemini_api_key):
     with st.spinner("Getting answer from Gemini..."):
         return call_gemini_api(prompt, gemini_api_key)
 
-def text_to_speech_elevenlabs(text, elevenlabs_api_key, voice_id="21m00Tcm4obsnInGRB_v"): # Default to 'Adam' voice
+def text_to_speech_elevenlabs(text, elevenlabs_api_key, voice_id="pNInz6obpgDQGcFmaJgB"): # Default to 'Adam' voice
     """Converts text to speech using the ElevenLabs API."""
     if not elevenlabs_api_key:
         st.error("ElevenLabs API Key is not provided. Please enter it in the sidebar.")
